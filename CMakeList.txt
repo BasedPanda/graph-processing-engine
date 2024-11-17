@@ -1,0 +1,75 @@
+cmake_minimum_required(VERSION 3.14)
+project(graph_processing_engine LANGUAGES CXX CUDA)
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD 14)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+
+# Find required packages
+find_package(OpenMP REQUIRED)
+find_package(CUDA REQUIRED)
+
+# Configure CUDA
+set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-O3;-gencode arch=compute_61,code=sm_61)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -fopenmp")
+
+# Collect source files
+file(GLOB_RECURSE SOURCES 
+    "src/core/*.cpp"
+    "src/parallel/*.cpp"
+    "src/parallel/*.cu"
+    "src/algorithms/*.cpp"
+    "src/utils/*.cpp"
+    "src/io/*.cpp"
+)
+
+# Create main library target
+add_library(graph_engine_lib ${SOURCES})
+
+# Set include directories
+target_include_directories(graph_engine_lib
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    PRIVATE
+        ${CUDA_INCLUDE_DIRS}
+)
+
+# Link against required libraries
+target_link_libraries(graph_engine_lib
+    PUBLIC
+        OpenMP::OpenMP_CXX
+        ${CUDA_LIBRARIES}
+        cuda
+        cudart
+)
+
+# Set compile options
+target_compile_options(graph_engine_lib
+    PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -O3>
+        $<$<COMPILE_LANGUAGE:CUDA>:-O3>
+)
+
+# Enable OpenMP
+set_target_properties(graph_engine_lib
+    PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON
+        POSITION_INDEPENDENT_CODE ON
+)
+
+# Add tests directory
+add_subdirectory(tests)
+
+# Installation rules
+install(TARGETS graph_engine_lib
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+)
+
+install(DIRECTORY src/
+    DESTINATION include/graph_engine
+    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.cuh"
+)
