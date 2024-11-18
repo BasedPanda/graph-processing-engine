@@ -1,11 +1,36 @@
 cmake_minimum_required(VERSION 3.14)
 project(graph_processing_engine LANGUAGES CXX CUDA)
 
+cmake_minimum_required(VERSION 3.14)
+project(graph_processing_engine LANGUAGES CXX CUDA)
+
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 14)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+
+# Add compiler definitions for CUDA availability
+add_definitions(-DHAS_CUDA)
+
+# Optional: Enable ccache if available
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+endif()
+
+# Find required packages
+find_package(OpenMP REQUIRED)
+find_package(CUDA REQUIRED)
+
+# Set CUDA architectures based on available hardware
+include(FindCUDA/select_compute_arch)
+CUDA_DETECT_INSTALLED_GPUS(INSTALLED_GPU_CCS_1)
+string(STRIP "${INSTALLED_GPU_CCS_1}" INSTALLED_GPU_CCS_2)
+string(REPLACE " " ";" INSTALLED_GPU_CCS_3 "${INSTALLED_GPU_CCS_2}")
+string(REPLACE "." "" CUDA_ARCH_LIST "${INSTALLED_GPU_CCS_3}")
+set(CMAKE_CUDA_ARCHITECTURES ${CUDA_ARCH_LIST})
 
 # Find required packages
 find_package(OpenMP REQUIRED)

@@ -30,27 +30,32 @@ void PageRank::execute(ExecutionDevice device) {
 void PageRank::executeOnCPU() {
     const size_t num_vertices = graph_->getVertexCount();
     const float random_jump = (1.0f - damping_factor_) / num_vertices;
+    bool converged = false;
     
     for (size_t iteration = 0; iteration < max_iterations_; ++iteration) {
-        // Store current ranks for convergence check
         prev_ranks_ = ranks_;
-        
-        // Reset ranks for this iteration
         std::fill(ranks_.begin(), ranks_.end(), random_jump);
         
-        // Update ranks
-        for (const auto& [vertex_id, vertex_ptr] : graph_->vertices()) {
-            const float contribution = damping_factor_ * prev_ranks_[vertex_id] / vertex_ptr->getOutDegree();
+        #pragma omp parallel for schedule(dynamic, 1000)
+        for (vertex_id_t v = 0; v < num_vertices; ++v) {
+            const Vertex* vertex = graph_->getVertex(v);
+            if (!vertex || vertex->getOutDegree() == 0) continue;
             
-            for (const auto& [neighbor_id, _] : vertex_ptr->getOutEdges()) {
+            const float contribution = damping_factor_ * prev_ranks_[v] / vertex->getOutDegree();
+            for (const auto& [neighbor_id, _] : vertex->getOutEdges()) {
+                #pragma omp atomic
                 ranks_[neighbor_id] += contribution;
             }
         }
         
-        // Check for convergence
         if (hasConverged()) {
+            converged = true;
             break;
         }
+    }
+    
+    if (!converged) {
+        LOG_WARNING("PageRank did not converge after {} iterations", max_iterations_);
     }
 }
 

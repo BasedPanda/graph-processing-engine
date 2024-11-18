@@ -27,19 +27,21 @@ bool Vertex::hasProperty(const std::string& key) const {
 }
 
 void Vertex::addOutEdge(vertex_id_t target, edge_id_t edge_id) {
-    // Check if edge already exists
-    auto it = std::find_if(out_edges_.begin(), out_edges_.end(),
-                          [target](const auto& p) { return p.first == target; });
-    if (it == out_edges_.end()) {
-        out_edges_.emplace_back(target, edge_id);
+    // Keep edges sorted for better performance
+    auto it = std::lower_bound(out_edges_.begin(), out_edges_.end(), target,
+        [](const auto& pair, vertex_id_t value) { return pair.first < value; });
+        
+    if (it == out_edges_.end() || it->first != target) {
+        out_edges_.emplace(it, target, edge_id);
     }
 }
 
 void Vertex::addInEdge(vertex_id_t source, edge_id_t edge_id) {
-    auto it = std::find_if(in_edges_.begin(), in_edges_.end(),
-                          [source](const auto& p) { return p.first == source; });
-    if (it == in_edges_.end()) {
-        in_edges_.emplace_back(source, edge_id);
+    auto it = std::lower_bound(in_edges_.begin(), in_edges_.end(), source,
+        [](const auto& pair, vertex_id_t value) { return pair.first < value; });
+        
+    if (it == in_edges_.end() || it->first != source) {
+        in_edges_.emplace(it, source, edge_id);
     }
 }
 

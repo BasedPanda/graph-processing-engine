@@ -1,6 +1,7 @@
 #include "gpu_engine.hpp"
 #include <stdexcept>
 #include <cstring>
+#include "../utils/logger.hpp"
 
 namespace graph_engine {
 
@@ -8,17 +9,42 @@ namespace graph_engine {
 namespace kernels {
 
 template<typename T>
-__global__ void vertexKernel(vertex_id_t* row_offsets,
-                            vertex_id_t* column_indices,
-                            weight_t* weights,
-                            T* vertex_data,
-                            size_t num_vertices);
+__global__ void vertexKernel(
+    vertex_id_t* row_offsets,
+    vertex_id_t* column_indices,
+    weight_t* weights,
+    T* vertex_data,
+    size_t num_vertices)
+{
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= num_vertices) return;
+
+    // Process vertex with ID 'tid'
+    const int start = row_offsets[tid];
+    const int end = row_offsets[tid + 1];
+    
+    for (int i = start; i < end; i++) {
+        vertex_id_t neighbor = column_indices[i];
+        weight_t weight = weights ? weights[i] : 1.0f;
+        // Custom vertex processing logic here
+    }
+}
 
 template<typename T>
-__global__ void edgeKernel(vertex_id_t* column_indices,
-                          weight_t* weights,
-                          T* edge_data,
-                          size_t num_edges);
+__global__ void edgeKernel(
+    vertex_id_t* column_indices,
+    weight_t* weights,
+    T* edge_data,
+    size_t num_edges)
+{
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= num_edges) return;
+
+    // Process edge with ID 'tid'
+    vertex_id_t target = column_indices[tid];
+    weight_t weight = weights ? weights[tid] : 1.0f;
+    // Custom edge processing logic here
+}
 
 } // namespace kernels
 
@@ -35,9 +61,15 @@ GPUEngine::GPUEngine()
 
 GPUEngine::~GPUEngine() {
     if (gpu_data_) {
-        if (gpu_data_->row_offsets) cudaFree(gpu_data_->row_offsets);
-        if (gpu_data_->column_indices) cudaFree(gpu_data_->column_indices);
-        if (gpu_data_->weights) cudaFree(gpu_data_->weights);
+        if (gpu_data_->row_offsets) {
+            cudaFree(gpu_data_->row_offsets);
+        }
+        if (gpu_data_->column_indices) {
+            cudaFree(gpu_data_->column_indices);
+        }
+        if (gpu_data_->weights) {
+            cudaFree(gpu_data_->weights);
+        }
     }
 }
 
@@ -63,6 +95,12 @@ void GPUEngine::initialize() {
 
     gpu_data_ = std::make_unique<GPUGraphData>();
     initialized_ = true;
+
+    // Log GPU information
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, device_id_);
+    LOG_INFO("Using GPU: {} (Compute Capability {}.{})",
+             prop.name, prop.major, prop.minor);
 }
 
 void GPUEngine::transferGraphToDevice(const Graph* graph) {
@@ -99,10 +137,16 @@ void GPUEngine::transferGraphToDevice(const Graph* graph) {
     row_offsets.push_back(current_offset);
 
     // Allocate GPU memory
-    size_t vertex_size = (graph->getVertexCount() + 1) * sizeof(vertex_id_t);
-    size_t edge_size = graph->getEdgeCount() * sizeof(vertex_id_t);
-    size_t weight_size = graph->isWeighted() ? graph->getEdgeCount() * sizeof(weight_t) : 0;
+    const size_t vertex_size = (graph->getVertexCount() + 1) * sizeof(vertex_id_t);
+    const size_t edge_size = graph->getEdgeCount() * sizeof(vertex_id_t);
+    const size_t weight_size = graph->isWeighted() ? graph->getEdgeCount() * sizeof(weight_t) : 0;
 
+    // Free previous allocations
+    if (gpu_data_->row_offsets) cudaFree(gpu_data_->row_offsets);
+    if (gpu_data_->column_indices) cudaFree(gpu_data_->column_indices);
+    if (gpu_data_->weights) cudaFree(gpu_data_->weights);
+
+    // Allocate new memory
     checkCudaError(cudaMalloc(&gpu_data_->row_offsets, vertex_size),
                    "Failed to allocate GPU memory for row offsets");
     checkCudaError(cudaMalloc(&gpu_data_->column_indices, edge_size),
@@ -132,6 +176,9 @@ void GPUEngine::transferGraphToDevice(const Graph* graph) {
     gpu_data_->num_edges = graph->getEdgeCount();
     gpu_data_->is_directed = graph->isDirected();
     gpu_data_->is_weighted = graph->isWeighted();
+
+    LOG_INFO("Graph transferred to GPU: {} vertices, {} edges",
+             gpu_data_->num_vertices, gpu_data_->num_edges);
 }
 
 template<typename T>
@@ -143,7 +190,8 @@ void GPUEngine::parallelVertexOp(std::function<void(vertex_id_t, T&)> kernel,
 
     // Allocate device memory for vertex data
     T* d_vertex_data;
-    size_t vertex_data_size = vertex_data.size() * sizeof(T);
+    const size_t vertex_data_size = vertex_data.size() * sizeof(T);
+    
     checkCudaError(cudaMalloc(&d_vertex_data, vertex_data_size),
                    "Failed to allocate GPU memory for vertex data");
 
@@ -153,7 +201,7 @@ void GPUEngine::parallelVertexOp(std::function<void(vertex_id_t, T&)> kernel,
                    "Failed to copy vertex data to GPU");
 
     // Calculate grid dimensions
-    int num_blocks = (gpu_data_->num_vertices + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    const int num_blocks = (gpu_data_->num_vertices + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
     // Launch kernel
     kernels::vertexKernel<<<num_blocks, THREADS_PER_BLOCK>>>(
@@ -186,7 +234,8 @@ void GPUEngine::parallelEdgeOp(std::function<void(edge_id_t, T&)> kernel,
 
     // Allocate device memory for edge data
     T* d_edge_data;
-    size_t edge_data_size = edge_data.size() * sizeof(T);
+    const size_t edge_data_size = edge_data.size() * sizeof(T);
+    
     checkCudaError(cudaMalloc(&d_edge_data, edge_data_size),
                    "Failed to allocate GPU memory for edge data");
 
@@ -196,7 +245,7 @@ void GPUEngine::parallelEdgeOp(std::function<void(edge_id_t, T&)> kernel,
                    "Failed to copy edge data to GPU");
 
     // Calculate grid dimensions
-    int num_blocks = (gpu_data_->num_edges + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    const int num_blocks = (gpu_data_->num_edges + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
     // Launch kernel
     kernels::edgeKernel<<<num_blocks, THREADS_PER_BLOCK>>>(
@@ -270,8 +319,10 @@ size_t GPUEngine::getAvailableMemory() const {
 
 void GPUEngine::checkCudaError(cudaError_t error, const char* message) {
     if (error != cudaSuccess) {
-        throw std::runtime_error(std::string(message) + ": " + 
-                               cudaGetErrorString(error));
+        std::string error_message = std::string(message) + ": " + 
+                                  cudaGetErrorString(error);
+        LOG_ERROR(error_message);
+        throw std::runtime_error(error_message);
     }
 }
 
@@ -281,46 +332,64 @@ bool GPUEngine::checkGPUCapabilities() {
                    "Failed to get device properties");
     
     int compute_capability = prop.major * 10 + prop.minor;
-    return compute_capability >= MIN_GPU_COMPUTE_CAPABILITY;
-}
-
-// CUDA Kernel Implementations
-namespace kernels {
-
-template<typename T>
-__global__ void vertexKernel(vertex_id_t* row_offsets,
-                            vertex_id_t* column_indices,
-                            weight_t* weights,
-                            T* vertex_data,
-                            size_t num_vertices) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= num_vertices) return;
-
-    // Process vertex with ID 'tid'
-    int start = row_offsets[tid];
-    int end = row_offsets[tid + 1];
     
-    for (int i = start; i < end; i++) {
-        vertex_id_t neighbor = column_indices[i];
-        weight_t weight = weights ? weights[i] : 1.0f;
-        // Custom vertex processing logic here
+    if (compute_capability < MIN_GPU_COMPUTE_CAPABILITY) {
+        LOG_WARNING("GPU compute capability {}.{} is below minimum requirement {}.{}",
+                   prop.major, prop.minor,
+                   MIN_GPU_COMPUTE_CAPABILITY / 10,
+                   MIN_GPU_COMPUTE_CAPABILITY % 10);
+        return false;
     }
+    
+    return true;
 }
 
-template<typename T>
-__global__ void edgeKernel(vertex_id_t* column_indices,
-                          weight_t* weights,
-                          T* edge_data,
-                          size_t num_edges) {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (tid >= num_edges) return;
+// Explicit template instantiations for common types
+template void GPUEngine::parallelVertexOp<float>(
+    std::function<void(vertex_id_t, float&)>, std::vector<float>&);
+template void GPUEngine::parallelVertexOp<double>(
+    std::function<void(vertex_id_t, double&)>, std::vector<double>&);
+template void GPUEngine::parallelVertexOp<int>(
+    std::function<void(vertex_id_t, int&)>, std::vector<int>&);
 
-    // Process edge with ID 'tid'
-    vertex_id_t target = column_indices[tid];
-    weight_t weight = weights ? weights[tid] : 1.0f;
-    // Custom edge processing logic here
+template void GPUEngine::parallelEdgeOp<float>(
+    std::function<void(edge_id_t, float&)>, std::vector<float>&);
+template void GPUEngine::parallelEdgeOp<double>(
+    std::function<void(edge_id_t, double&)>, std::vector<double>&);
+template void GPUEngine::parallelEdgeOp<int>(
+    std::function<void(edge_id_t, int&)>, std::vector<int>&);
+
+template float* GPUEngine::allocateDevice<float>(size_t);
+template double* GPUEngine::allocateDevice<double>(size_t);
+template int* GPUEngine::allocateDevice<int>(size_t);
+
+template void GPUEngine::freeDevice<float>(float*);
+template void GPUEngine::freeDevice<double>(double*);
+template void GPUEngine::freeDevice<int>(int*);
+
+template void GPUEngine::copyToDevice<float>(const std::vector<float>&, float*);
+template void GPUEngine::copyToDevice<double>(const std::vector<double>&, double*);
+template void GPUEngine::copyToDevice<int>(const std::vector<int>&, int*);
+
+template void GPUEngine::copyToHost<float>(const float*, std::vector<float>&);
+template void GPUEngine::copyToHost<double>(const double*, std::vector<double>&);
+template void GPUEngine::copyToHost<int>(const int*, std::vector<int>&);
+
+// Add kernel template instantiations
+namespace kernels {
+    template __global__ void vertexKernel<float>(
+        vertex_id_t*, vertex_id_t*, weight_t*, float*, size_t);
+    template __global__ void vertexKernel<double>(
+        vertex_id_t*, vertex_id_t*, weight_t*, double*, size_t);
+    template __global__ void vertexKernel<int>(
+        vertex_id_t*, vertex_id_t*, weight_t*, int*, size_t);
+        
+    template __global__ void edgeKernel<float>(
+        vertex_id_t*, weight_t*, float*, size_t);
+    template __global__ void edgeKernel<double>(
+        vertex_id_t*, weight_t*, double*, size_t);
+    template __global__ void edgeKernel<int>(
+        vertex_id_t*, weight_t*, int*, size_t);
 }
-
-} // namespace kernels
 
 } // namespace graph_engine
